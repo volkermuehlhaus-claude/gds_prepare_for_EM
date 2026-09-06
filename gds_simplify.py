@@ -42,7 +42,7 @@ from gds_geometry_utils import (
     detect_and_delete_periphery_rings,
 )
 
-__version__ = "1.0"
+__version__ = "1.1"
 
 
 # ==================== settings =========================

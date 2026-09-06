@@ -99,7 +99,10 @@ def decompose_polygon_holes(points, min_hole_area=1e-6):
     hole_area_fraction = hole_area / exterior_area
 
     return {
-        "exterior_coords": np.array(fixed.exterior.coords),
+        # shapely rings are closed (first point repeated as the last) -
+        # drop that duplicate so downstream code treating this as a GDSII
+        # polygon point loop doesn't get a zero-length closing edge
+        "exterior_coords": np.array(fixed.exterior.coords)[:-1],
         "holes": [ShapelyPolygon(ring) for ring in fixed.interiors],
         "exterior_area": exterior_area,
         "hole_area_fraction": hole_area_fraction,
