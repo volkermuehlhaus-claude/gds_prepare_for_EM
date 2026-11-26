@@ -1,5 +1,7 @@
 # Prepare IHP SG13G2 GDSII layout for EM simulation
 
+gds_prepare_for_EM is one of several open-source tools for EM simulation of IHP SG13G2 layouts, from KLayout to S-parameters and circuit models. For an overview, see [Which tool for what](https://github.com/VolkerMuehlhaus/gds2palace_ihp_sg13g2/blob/main/doc/toolchain_overview.md).
+
 ---
 
 **Version 1.8: the tools now use gdstk instead of gdspy, and are 3 to 15 times faster.** Layouts where gdspy never finished (it could hang on some polygons with holes) now run in seconds.
