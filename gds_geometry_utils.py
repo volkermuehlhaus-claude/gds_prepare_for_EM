@@ -170,6 +170,51 @@ def cut_holes_as_valid_polygons(exterior_coords, holes, layer, datatype,
     return None
 
 
+LAYER_ID_FACTOR = 100000       # gds2palace layer id of a layer with a Datatype: 1 | 5 digits layer | 5 digits datatype
+
+
+def layer_spec(value):
+    """(layer number, datatype or None) of one entry of a layer list: a GDS layer number (all datatypes of that
+    number, as always), a (layer, datatype) pair (that datatype only), or a gds2palace layer id of a stackup layer
+    with a Datatype (68/20 is 10006800020)."""
+    if isinstance(value, (tuple, list)):
+        return int(value[0]), (None if value[1] is None else int(value[1]))
+    value = int(value)
+    if value >= LAYER_ID_FACTOR * LAYER_ID_FACTOR:
+        return (value // LAYER_ID_FACTOR) % LAYER_ID_FACTOR, value % LAYER_ID_FACTOR
+    return value, None
+
+
+class LayerSelection:
+    """Which shapes a list of layers selects. An entry is a GDS layer number (every datatype of that number), a
+    (layer, datatype) pair or a gds2palace layer id with a datatype (only that datatype), see layer_spec().
+    selection(layer, datatype) tells whether a shape is selected; `layer in selection` whether any datatype of
+    that layer number is."""
+
+    def __init__(self, layers):
+        self.specs = [layer_spec(v) for v in layers]
+        self.numbers = {layer for layer, datatype in self.specs if datatype is None}
+        self.pairs = {(layer, datatype) for layer, datatype in self.specs if datatype is not None}
+        self.any_number = self.numbers | {layer for layer, _ in self.pairs}
+
+    def __call__(self, layer, datatype):
+        return layer in self.numbers or (layer, datatype) in self.pairs
+
+    def __contains__(self, layer):
+        return layer in self.any_number
+
+    def __iter__(self):
+        return iter(self.specs)
+
+    def __len__(self):
+        return len(self.specs)
+
+
+def layer_selection(layers):
+    """LayerSelection of a layer list (or the selection itself)."""
+    return layers if isinstance(layers, LayerSelection) else LayerSelection(layers)
+
+
 def validate_and_repair_polygons(library, layers_list, min_hole_area=1e-6):
     """
     Final safety-net pass: check every polygon on `layers_list`, in every
@@ -197,6 +242,7 @@ def validate_and_repair_polygons(library, layers_list, min_hole_area=1e-6):
     """
     repaired_count = 0
     unresolved = []
+    selected = layer_selection(layers_list)
 
     for cell in library.cells:
         remove, add = [], []
@@ -205,7 +251,7 @@ def validate_and_repair_polygons(library, layers_list, min_hole_area=1e-6):
             poly_layer = poly.layer
             poly_purpose = poly.datatype
 
-            if poly_layer not in layers_list or len(polypoints) < 3:
+            if not selected(poly_layer, poly_purpose) or len(polypoints) < 3:
                 continue
 
             shapely_poly = ShapelyPolygon(polypoints)

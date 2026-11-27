@@ -41,6 +41,7 @@ from gds_geometry_utils import (
     design_cell,
     only_cell,
     polygons_by_spec,
+    layer_selection,
     cell_layers,
     flat_polygon_cell,
     Progress,
@@ -48,7 +49,7 @@ from gds_geometry_utils import (
     SMALL_HOLE_AREA,
 )
 
-__version__ = "1.8.0"
+__version__ = "1.9.0"
 
 # a polygon-with-hole where the hole covers this much of the exterior area
 # is treated as a thin ring, not "fill with cutout" - it gets deleted
@@ -226,6 +227,7 @@ def find_isolated_same_size_polygons_by_layer(cell, layers_list, minsize=1, maxs
     # Get polygons grouped by layer, hierarchy flattened
     polys_by_layer = polygons_by_spec(cell)  # {(layer, datatype): [point arrays]}
     isolated_per_layer = defaultdict(dict)
+    selected = layer_selection(layers_list)     # a layer number, or one datatype of it
 
     for (layer, datatype), polys_raw in polys_by_layer.items():
         if len(polys_raw) == 0:
@@ -247,7 +249,7 @@ def find_isolated_same_size_polygons_by_layer(cell, layers_list, minsize=1, maxs
                 all_polys.append(poly)
 
         # only check if not via layer
-        if layer in layers_list:
+        if selected(layer, datatype):
 
             groups = defaultdict(list)
             for poly in all_polys:
@@ -532,10 +534,11 @@ def merge_polygons_by_layer(cell, layers_list=None):
   new_cell = gdstk.Cell(cell.name + "_merged_by_layer")
 
   polys_by_layer = polygons_by_spec(cell, depth=0)
+  selected = None if layers_list is None else layer_selection(layers_list)
   for (layer, datatype), polys in polys_by_layer.items():
     if not polys:
       continue
-    if layers_list is not None and layer not in layers_list:
+    if selected is not None and not selected(layer, datatype):
       new_cell.add(*[gdstk.Polygon(pts, layer=layer, datatype=datatype) for pts in polys])
       continue
     merged_points = merge_polygons(polys)
@@ -569,9 +572,10 @@ def fill_repeated_holes_by_layer(cell, layers_list, mincount=20, max_hole_area=N
   new_cell = gdstk.Cell(cell.name)
 
   polys_by_layer = polygons_by_spec(cell, depth=0)
+  selected = layer_selection(layers_list)
   for (layer, datatype), polys in polys_by_layer.items():
     fill_holes = []
-    if layer in layers_list and polys:
+    if selected(layer, datatype) and polys:
       # union of all pieces (merge_polygons() fractures to max_points, so one
       # hole can be enclosed by several output polygons)
       parts = []
@@ -706,7 +710,8 @@ def remove_cutout_keep_hierarchy (library, layers_list, design_bbox=None, max_ho
   """
   if design is None:
     design, _ = design_cell(library)
-  filler = CutoutFiller(library, design, lambda poly: poly.layer in layers_list, exclude_purpose_list,
+  selected = layer_selection(layers_list)
+  filler = CutoutFiller(library, design, lambda poly: selected(poly.layer, poly.datatype), exclude_purpose_list,
                         small_hole_area=small_hole_area, repeat_count=repeat_count, max_hole_area=max_hole_area)
 
   # iterate over cells

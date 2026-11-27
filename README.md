@@ -4,6 +4,8 @@ gds_prepare_for_EM is one of several open-source tools for EM simulation of IHP 
 
 ---
 
+**Version 1.9: layers with a datatype.** A stackup layer that names its GDS datatype (gds2palace stackup format 3.2, e.g. a metal on 68/20 and a via on 68/44) is now simplified on that datatype only. This concerns setupEM's Simplify GDS and the gds2palace MCP server, which take their layers from the stackup (`layers_from_stackup()` in `gds_simplify_for_em`): before, such layers were left out without a message. The command-line tools and layouts on plain layer numbers work as before.
+
 **Version 1.8: the tools now use gdstk instead of gdspy, and are 3 to 15 times faster.** Layouts where gdspy never finished (it could hang on some polygons with holes) now run in seconds.
 
 Large layouts with millions of fill vias, such as a full chip with its pad frame, are also much faster: seal-ring detection and via merging took minutes there (440 s for one PA chip, now 80 s). On long runs, gds_prepare_for_EM shows how far it is every 10 seconds, and how long each step took.

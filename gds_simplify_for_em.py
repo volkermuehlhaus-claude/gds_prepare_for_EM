@@ -33,7 +33,8 @@
 
 import gdstk
 
-from gds_geometry_utils import cell_bounding_box, cells_by_name, design_cell, polygons_by_spec
+from gds_geometry_utils import (cell_bounding_box, cells_by_name, design_cell, layer_selection, layer_spec,
+                                polygons_by_spec)
 
 # conventional GDS layer range for port (and thermal) polygons in gds2palace/setupEM,
 # same fallback as setupEM's Preferences > Ports
@@ -50,23 +51,42 @@ def layers_from_stackup(metals_list, port_layer_range=DEFAULT_PORT_LAYER_RANGE):
     """Metal layers and via layers for run_simplify(), from a gds2palace stackup
     (metals_list from stackup_reader.read_substrate()).
     Returns (metal_layers, via_layers): metal_layers is the sorted list of planar
-    metal (conductor or sheet) layer numbers; via_layers is a list of
+    metal (conductor or sheet) layers; via_layers is a list of
     (via layer, [metal layers above], [metal layers below]). Layers inside
     port_layer_range are left out, they hold port polygons, not metal.
+
+    A layer is its GDS layer number: every datatype of that number, as always. A
+    stackup layer with a Datatype (stackup format 3.2) is the pair
+    (layer number, datatype): only that datatype is simplified, so that a metal on
+    68/20 and a via on 68/44 are not mixed. run_simplify() and the other functions
+    of this module take both forms.
     """
     layer_min, layer_max = port_layer_range
+
+    def spec(m):
+        number, datatype = layer_spec(m.layernum)
+        return number if datatype is None else (number, datatype)
+
+    def number(m):
+        return layer_spec(m.layernum)[0]
+
     metal_layers = sorted(
-        int(m.layernum) for m in metals_list.getallplanarmetals()
-        if not (layer_min <= int(m.layernum) <= layer_max)
-    )
+        (spec(m) for m in metals_list.getallplanarmetals() if not (layer_min <= number(m) <= layer_max)),
+        key=lambda s: layer_spec(s)[0:1] + (layer_spec(s)[1] or -1,))
     via_layers = [
-        (int(m.layernum),
-         [int(n.layernum) for n in m.above if n.is_metal],
-         [int(n.layernum) for n in m.below if n.is_metal])
+        (spec(m),
+         [spec(n) for n in m.above if n.is_metal],
+         [spec(n) for n in m.below if n.is_metal])
         for m in metals_list.metals
-        if m.is_via and not (layer_min <= int(m.layernum) <= layer_max)
+        if m.is_via and not (layer_min <= number(m) <= layer_max)
     ]
     return metal_layers, via_layers
+
+
+def layer_label(spec):
+    """A layer of layers_from_stackup() as text: "134", or "68/20" with a datatype."""
+    number, datatype = layer_spec(spec)
+    return str(number) if datatype is None else f"{number}/{datatype}"
 
 
 def _top_cell(lib, cellname):
@@ -185,12 +205,15 @@ def run_simplify(gds_path, metal_layers, output_path, cellname="",
         print(f'Via array merging (distance {via_merge_size} um):')
 
         def metal_polygons(layers):
-            polygons = [p for (layer, purpose), polys in lpp.items() if layer in layers for p in polys]
+            selected = layer_selection(layers)
+            polygons = [p for (layer, purpose), polys in lpp.items() if selected(layer, purpose) for p in polys]
             # touching metal pieces are one metal shape for via grouping
             return merge_polygons(polygons) if polygons else []
 
-        for via_layer, above_layers, below_layers in via_layers:
-            purposes = [purpose for (layer, purpose) in lpp if layer == via_layer]
+        for via_spec, above_layers, below_layers in via_layers:
+            via_selected = layer_selection([via_spec])
+            via_layer = layer_spec(via_spec)[0]
+            purposes = [purpose for (layer, purpose) in lpp if via_selected(layer, purpose)]
             if not purposes:
                 continue
             above, below = metal_polygons(above_layers), metal_polygons(below_layers)
@@ -270,8 +293,9 @@ def ground_plane_holes(cell, layers_list, mincount=20, size_tol=1e-3):
     (x0, y0), (x1, y1) = cell_bounding_box(cell)
     layout_area = (x1 - x0) * (y1 - y0)
     result = {}
+    selected = layer_selection(layers_list)
     for (layer, datatype), polys in polygons_by_spec(cell).items():
-        if layer not in layers_list or not polys:
+        if not selected(layer, datatype) or not polys:
             continue
         parts = _merged_parts(polys)
         grounds = [g for g in parts if _is_ground_plane(g, layout_area)]
@@ -344,13 +368,21 @@ def estimate_polygon_count(gds_path, cellname, layernumbers, purposelist):
     by actually generating that many polygon objects. Returns None if the
     file can't even be opened here (the real read_gds() call is expected to
     surface that error properly instead).
+
+    layernumbers: GDS layer numbers, counted on the datatypes of purposelist
+    (None: all), as read_gds() reads them. A (layer, datatype) pair or a
+    gds2palace layer id of a stackup layer with a Datatype (as
+    metals_list.getlayernumbers() returns it) is counted on that datatype,
+    whatever purposelist says.
     """
     try:
         library, cell = open_gds_cell(gds_path, cellname)
     except Exception:
         return None
 
-    layernumbers = set(int(n) for n in layernumbers)
+    specs = [layer_spec(n) for n in layernumbers]
+    layernumbers = {layer for layer, datatype in specs if datatype is None}
+    pairs = {(layer, datatype) for layer, datatype in specs if datatype is not None}
     purposeset = set(int(p) for p in purposelist) if purposelist else None
 
     memo = {}
@@ -360,7 +392,8 @@ def estimate_polygon_count(gds_path, cellname, layernumbers, purposelist):
             return memo[c.name]
         total = 0
         for polygon in c.polygons:
-            if polygon.layer in layernumbers and (purposeset is None or polygon.datatype in purposeset):
+            if ((polygon.layer in layernumbers and (purposeset is None or polygon.datatype in purposeset))
+                    or (polygon.layer, polygon.datatype) in pairs):
                 total += 1
         for ref in c.references:
             if not isinstance(ref.cell, gdstk.Cell):
