@@ -41,6 +41,17 @@ def test_merged_shape_keeps_its_hole():
     assert sum(s.area for s in shapes) == pytest.approx(expected.area, rel=1e-9), "pieces overlap"
 
 
+def test_island_inside_the_hole_stays():
+    island = (-180.0, -300.0, -170.0, -290.0)
+    shapes = SHAPES + [island]
+    merged = prepare.merge_polygons(points() + [np.array([(-180, -300), (-170, -300), (-170, -290), (-180, -290)])])
+    pieces = [Polygon(p).buffer(0) for p in merged]
+    assert any(s.contains(Point(-175, -295)) for s in pieces), "the island was cut out with the hole"
+    assert not any(s.contains(IN_THE_HOLE) for s in pieces)
+    expected = unary_union([box(*r) if isinstance(r, tuple) else Polygon(r) for r in shapes])
+    assert unary_union(pieces).area == pytest.approx(expected.area, rel=1e-9)
+
+
 def test_keyhole_results_are_left_alone():
     """the usual case: gdstk links the hole to its outline, nothing to repair"""
     frame = [np.array([(0, 0), (10, 0), (10, 2), (0, 2)]), np.array([(0, 8), (10, 8), (10, 10), (0, 10)]),

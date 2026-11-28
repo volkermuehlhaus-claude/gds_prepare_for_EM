@@ -410,17 +410,17 @@ def _with_holes_cut(result):
   outline (a keyhole polygon), but in some unions of many shapes it returns the hole as a separate polygon
   that only runs the other way round (clockwise). GDSII has no holes: every reader, also gdstk itself after
   fracture(), takes such a polygon as metal, so a cut-out of a ground plane was filled. Found in a Metal1
-  union of 29 rectangles (tests/test_hole_merge.py). Such a result is rebuilt with shapely and returned as
-  polygons without holes.
+  union of 29 rectangles (tests/test_hole_merge.py). Such a result is rebuilt with shapely, largest shape
+  first (outlines added, holes cut, so an island inside a hole stays), and returned as polygons without holes.
   """
-  holes = [p for p in result if _signed_area(p.points) < 0]
-  if not holes:
+  signed = [_signed_area(p.points) for p in result]
+  if all(a >= 0 for a in signed):
     return result
-  outlines = [p for p in result if _signed_area(p.points) >= 0]
-  shape = unary_union([ShapelyPolygon(q.points).buffer(0) for p in outlines for q in p.fracture(max_points=199)
-                       if len(q.points) >= 3])
-  shape = shape.difference(unary_union([ShapelyPolygon(p.points).buffer(0) for p in holes]))
-  return [gdstk.Polygon(np.array(g.exterior.coords[:-1])) for g in _hole_free_pieces(shape)]
+  region = None
+  for p, a in sorted(zip(result, signed), key=lambda pa: -abs(pa[1])):
+    shape = unary_union([ShapelyPolygon(q.points).buffer(0) for q in p.fracture(max_points=199) if len(q.points) >= 3])
+    region = shape if region is None else (region.union(shape) if a > 0 else region.difference(shape))
+  return [gdstk.Polygon(np.array(g.exterior.coords[:-1])) for g in _hole_free_pieces(region)]
 
 
 def _merge_via_group(via_polygons, maxspacing):
