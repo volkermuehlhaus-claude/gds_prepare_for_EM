@@ -29,7 +29,8 @@ from rtree import index  # pip install rtree
 import numpy as np
 import shapely
 from shapely.geometry import Polygon as ShapelyPolygon
-from shapely.ops import unary_union
+from shapely.geometry import LineString
+from shapely.ops import split, unary_union
 from shapely.validation import make_valid
 
 from gds_geometry_utils import (
@@ -49,7 +50,7 @@ from gds_geometry_utils import (
     SMALL_HOLE_AREA,
 )
 
-__version__ = "1.9.0"
+__version__ = "1.9.1"
 
 # a polygon-with-hole where the hole covers this much of the exterior area
 # is treated as a thin ring, not "fill with cutout" - it gets deleted
@@ -383,6 +384,45 @@ def _spatial_tiles(polygons, per_tile=VIA_TILE_SIZE):
   return [list(part) for part in np.split(order, np.flatnonzero(np.diff(key[order])) + 1)]
 
 
+def _signed_area(points):
+  x, y = points[:, 0], points[:, 1]
+  return 0.5 * float(np.sum(x * np.roll(y, -1) - np.roll(x, -1) * y))
+
+
+def _hole_free_pieces(shape):
+  """The polygons of a shapely geometry, each cut until it has no hole (a vertical cut through every hole)."""
+  todo = [g for g in getattr(shape, 'geoms', [shape]) if g.geom_type == 'Polygon' and not g.is_empty]
+  done = []
+  while todo:
+    polygon = todo.pop()
+    if not polygon.interiors:
+      done.append(polygon)
+      continue
+    x = polygon.interiors[0].centroid.x
+    _, ymin, _, ymax = polygon.bounds
+    todo += [g for g in split(polygon, LineString([(x, ymin - 1), (x, ymax + 1)])).geoms if g.area > 0]
+  return done
+
+
+def _with_holes_cut(result):
+  """
+  A gdstk boolean result, with every hole cut out of its shape. gdstk 1.0.2 normally links a hole to its
+  outline (a keyhole polygon), but in some unions of many shapes it returns the hole as a separate polygon
+  that only runs the other way round (clockwise). GDSII has no holes: every reader, also gdstk itself after
+  fracture(), takes such a polygon as metal, so a cut-out of a ground plane was filled. Found in a Metal1
+  union of 29 rectangles (tests/test_hole_merge.py). Such a result is rebuilt with shapely and returned as
+  polygons without holes.
+  """
+  holes = [p for p in result if _signed_area(p.points) < 0]
+  if not holes:
+    return result
+  outlines = [p for p in result if _signed_area(p.points) >= 0]
+  shape = unary_union([ShapelyPolygon(q.points).buffer(0) for p in outlines for q in p.fracture(max_points=199)
+                       if len(q.points) >= 3])
+  shape = shape.difference(unary_union([ShapelyPolygon(p.points).buffer(0) for p in holes]))
+  return [gdstk.Polygon(np.array(g.exterior.coords[:-1])) for g in _hole_free_pieces(shape)]
+
+
 def _merge_via_group(via_polygons, maxspacing):
   """
   Merge vias closer than maxspacing: oversize by half the spacing, OR,
@@ -402,7 +442,7 @@ def _merge_via_group(via_polygons, maxspacing):
   for tile in _spatial_tiles(via_polygons):
     grown += gdstk.offset([np.asarray(via_polygons[i]) for i in tile], offset, join='miter', tolerance=2,
                           precision=0.001, use_union=True)
-  merged = gdstk.boolean(grown, [], "or")
+  merged = _with_holes_cut(gdstk.boolean(grown, [], "or"))
   shrunk = gdstk.offset(merged, -offset, join='miter', tolerance=2, precision=0.001, use_union=True)
   if not shrunk:
     return []
@@ -423,7 +463,7 @@ def _polygon_to_points(polygon):
   if not polygon.interiors:
     return [exterior]
   holes = [np.array(ring.coords[:-1]) for ring in polygon.interiors]
-  result = gdstk.boolean([exterior], holes, "not")
+  result = _with_holes_cut(gdstk.boolean([exterior], holes, "not"))
   return [q.points for p in result for q in p.fracture(max_points=199)]
 
 
@@ -503,7 +543,7 @@ def merge_polygons (polygons, max_points=999):
   if len(polygons) <= 1:
     return polygons
 
-  merged = gdstk.boolean(polygons, [], "or")
+  merged = _with_holes_cut(gdstk.boolean(polygons, [], "or"))
 
   # boolean() returns nothing when the resulting union is empty (degenerate
   # input) - keep the original polygons rather than silently dropping them

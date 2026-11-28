@@ -4,6 +4,8 @@ gds_prepare_for_EM is one of several open-source tools for EM simulation of IHP 
 
 ---
 
+**Version 1.9.1: holes in merged metal are kept.** When shapes are merged (`gds_prepare_for_EM`, `gds_simplify`, setupEM's Simplify GDS, the gds2palace MCP server), a hole in the merged shape could come out filled: the geometry library returned it as a separate polygon, which every GDSII reader takes as metal. It happened in some unions of many shapes, e.g. a cut-out of a Metal1 plane around transistors. Layouts prepared with an earlier version may have such filled cut-outs.
+
 **Version 1.9: layers with a datatype.** A stackup layer that names its GDS datatype (gds2palace stackup format 3.2, e.g. a metal on 68/20 and a via on 68/44) is now simplified on that datatype only. This concerns setupEM's Simplify GDS and the gds2palace MCP server, which take their layers from the stackup (`layers_from_stackup()` in `gds_simplify_for_em`): before, such layers were left out without a message. The command-line tools and layouts on plain layer numbers work as before.
 
 **Version 1.8: the tools now use gdstk instead of gdspy, and are 3 to 15 times faster.** Layouts where gdspy never finished (it could hang on some polygons with holes) now run in seconds.
